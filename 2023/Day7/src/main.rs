@@ -8,6 +8,7 @@ use std::str::FromStr;
 #[repr(u8)]
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 enum Card {
+    Joker = 1,
     Two = 2,
     Three = 3,
     Four = 4,
@@ -17,7 +18,6 @@ enum Card {
     Eight = 8,
     Nine = 9,
     Ten = 10,
-    Jack = 11,
     Queen = 12,
     King = 13,
     Ace = 14,
@@ -36,7 +36,7 @@ impl FromStr for Card {
             "8" => Ok(Card::Eight),
             "9" => Ok(Card::Nine),
             "T" => Ok(Card::Ten),
-            "J" => Ok(Card::Jack),
+            "J" => Ok(Card::Joker),
             "Q" => Ok(Card::Queen),
             "K" => Ok(Card::King),
             "A" => Ok(Card::Ace),
@@ -60,6 +60,7 @@ impl HandType {
     fn from(cards: &[Card; 5]) -> HandType {
         let mut counts = cards
             .iter()
+            .filter(|e| **e != Card::Joker)
             .fold(&mut HashMap::new(), |acc, e| {
                 let count = acc.entry(e).or_insert(0);
                 *count += 1;
@@ -67,9 +68,17 @@ impl HandType {
             })
             .values()
             .cloned()
-            .collect::<Vec<i32>>();
+            .collect::<Vec<u32>>();
 
         counts.sort_unstable_by(|a, b| b.cmp(a));
+
+        let num_non_jokers: u32 = counts.iter().sum();
+
+        if num_non_jokers == 0 {
+            return HandType::FiveOfAKind;
+        }
+
+        counts[0] += 5 - num_non_jokers;
 
         match counts.as_slice() {
             [1, 1, 1, 1, 1] => HandType::HighCard,
@@ -142,7 +151,7 @@ impl FromStr for Hand {
 }
 
 fn main() {
-    let input = include_str!("../part1.txt");
+    let input = include_str!("../part2.txt");
     let mut hands = input
         .lines()
         .map(|line| line.parse::<Hand>().unwrap())
