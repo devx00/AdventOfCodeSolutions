@@ -1,8 +1,9 @@
-#![allow(dead_code)]
-
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::convert::TryInto;
+use std::fs::File;
+use std::io::prelude::*;
+use std::io::BufReader;
 use std::str::FromStr;
 
 #[repr(u8)]
@@ -151,10 +152,16 @@ impl FromStr for Hand {
 }
 
 fn main() {
-    let input = include_str!("../inputs/part2.txt");
-    let mut hands = input
+    let input_file = File::open("inputs/part2.txt").unwrap();
+    let reader = BufReader::new(input_file);
+
+    let mut hands = reader
         .lines()
-        .map(|line| line.parse::<Hand>().unwrap())
+        .map(|line| {
+            line.expect("Line should be present")
+                .parse::<Hand>()
+                .unwrap()
+        })
         .collect::<Vec<Hand>>();
 
     hands.sort();
