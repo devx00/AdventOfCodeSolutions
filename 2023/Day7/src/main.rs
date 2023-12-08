@@ -158,7 +158,7 @@ fn main() {
     let mut hands = reader
         .lines()
         .map(|line| {
-            line.expect("Line should be present")
+            line.expect("Expected line to be present but received none.")
                 .parse::<Hand>()
                 .unwrap()
         })
