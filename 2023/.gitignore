@@ -1,0 +1,3 @@
+# Ignore all .txt files as these are likely inputs. 
+# The creator has requested inputs do not be included in the repo.
+**/*.txt
