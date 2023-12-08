@@ -151,7 +151,7 @@ impl FromStr for Hand {
 }
 
 fn main() {
-    let input = include_str!("../part2.txt");
+    let input = include_str!("../inputs/part2.txt");
     let mut hands = input
         .lines()
         .map(|line| line.parse::<Hand>().unwrap())
