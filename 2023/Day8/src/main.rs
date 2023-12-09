@@ -1,3 +1,4 @@
+use std::cmp::{max, min};
 use std::convert::TryInto;
 use std::{collections::HashMap, str::FromStr};
 
@@ -11,6 +12,33 @@ impl FromStr for Identifier {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let key: [u8; 3] = s.as_bytes().try_into().unwrap();
         Ok(Identifier { key })
+    }
+}
+
+struct Instructions {
+    sequence: Vec<Direction>,
+    idx: usize,
+}
+
+impl Iterator for Instructions {
+    type Item = Direction;
+
+    fn next(&mut self) -> Option<Direction> {
+        if self.idx >= self.sequence.len() {
+            self.idx = 0;
+        }
+
+        let n = Some(self.sequence[self.idx]);
+
+        self.idx += 1;
+
+        n
+    }
+}
+
+impl Instructions {
+    fn reset(&mut self) {
+        self.idx = 0;
     }
 }
 
@@ -32,12 +60,13 @@ impl FromStr for Direction {
 }
 
 #[derive(Debug, Hash, Copy, Clone)]
-struct Location {
+struct Node {
+    identifier: Identifier,
     left: Identifier,
     right: Identifier,
 }
 
-impl Location {
+impl Node {
     fn direction(&self, d: Direction) -> Identifier {
         match d {
             Direction::Left => self.left,
@@ -46,35 +75,52 @@ impl Location {
     }
 }
 
-#[derive(Debug, Clone)]
-struct LocationMap {
-    locations: HashMap<Identifier, Location>,
-}
+// Trying to do these challenges without any crates so this is
+// my attempt at an LCM function. Its just the first way I thought
+// to do it and its likely not ideal lol.
+fn naive_lcm(a: usize, b: usize) -> usize {
+    let mut high = max(a, b);
+    let mut low = min(a, b);
 
-impl LocationMap {
-    fn walk(&self, sequence: Vec<Direction>, start: Identifier, target: Identifier) -> u64 {
-        let mut steps = 0;
-        let mut next = start;
-        let mut seq = sequence.iter().clone();
-        while next != target {
-            steps += 1;
-            let nextd = seq
-                .next()
-                .or_else(|| {
-                    seq = sequence.iter().clone();
-
-                    seq.next()
-                })
-                .unwrap();
-            next = self.locations.get(&next).expect("F").direction(*nextd);
+    while high != low {
+        low += min(a, b);
+        if low > high {
+            high += max(a, b);
         }
-
-        steps
     }
+
+    high
 }
 
+fn count_from(
+    location: &Node,
+    lmap: &HashMap<Identifier, Node>,
+    sequence: Vec<Direction>,
+) -> usize {
+    let mut instructions = Instructions { sequence, idx: 0 };
+
+    let mut count = 0;
+    let mut loc = location;
+    while loc.identifier.key[2] != b'Z' {
+        let nexti = instructions
+            .next()
+            .expect("Should always have a next instruction.");
+        loc = lmap
+            .get(&loc.direction(nexti))
+            .expect("Should always have a node.");
+        count += 1;
+    }
+
+    println!(
+        "Finished {:?} with {:?} cycles.",
+        location.identifier.key, count
+    );
+    count
+}
+
+// Need to refactor to find the num cycles for each and then find the LCM of those.
 fn main() {
-    let input = include_str!("../inputs/part1.txt");
+    let input = include_str!("../inputs/part2.txt");
 
     let sequence: Vec<Direction> = input
         .lines()
@@ -84,7 +130,7 @@ fn main() {
         .map(|c| c.to_string().parse::<Direction>().unwrap())
         .collect();
 
-    let instructions: HashMap<Identifier, Location> = input
+    let locations: HashMap<Identifier, Node> = input
         .lines()
         .skip(2)
         .fold(&mut HashMap::new(), |acc, line| {
@@ -97,9 +143,11 @@ fn main() {
                 .split_once(", ")
                 .unwrap();
 
+            let id = loc.parse::<Identifier>().unwrap();
             acc.insert(
-                loc.parse::<Identifier>().unwrap(),
-                Location {
+                id,
+                Node {
+                    identifier: id,
                     left: left.parse::<Identifier>().unwrap(),
                     right: right.parse::<Identifier>().unwrap(),
                 },
@@ -109,13 +157,20 @@ fn main() {
         })
         .clone();
 
-    let locmap = LocationMap {
-        locations: instructions,
-    };
+    let answer = locations
+        .iter()
+        .filter(|(k, _)| k.key[2] == b'A')
+        .map(|(_, v)| {
+            let node = v;
 
-    let steps = locmap.walk(sequence, "AAA".parse().unwrap(), "ZZZ".parse().unwrap());
-
-    println!("Steps: {}", steps);
+            count_from(&node, &locations, sequence.clone())
+        })
+        // .collect::<Vec<usize>>()
+        .reduce(|acc, v| naive_lcm(acc, v))
+        .unwrap();
+    //
+    println!("Steps: {:?}", answer);
 
     ()
 }
+//
