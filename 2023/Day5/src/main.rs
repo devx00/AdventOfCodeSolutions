@@ -35,7 +35,7 @@ impl Category {
         Some(Category {
             name: category_name.to_string(),
             ranges,
-            next_category: next_category,
+            next_category,
         })
     }
 
