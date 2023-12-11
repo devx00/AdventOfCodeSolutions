@@ -161,7 +161,7 @@ fn part1() {
                 .sum::<u32>()
         })
         .sum();
-    println!("Result: {}", result);
+    println!("Part 1 Result: {}", result);
 }
 
 fn part2() {
@@ -205,9 +205,10 @@ fn part2() {
                 .sum::<u32>()
         })
         .sum::<u32>();
-    println!("Result: {:?}", result);
+    println!("Part 2 Result: {}", result);
 }
 
 fn main() {
+    part1();
     part2();
 }
