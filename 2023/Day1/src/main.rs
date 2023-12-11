@@ -75,10 +75,7 @@ fn part2() {
 
             let res: u64 = vec![first, last]
                 .iter()
-                .map(|v| {
-                    // println!("Joined: {}\n\n", v);
-                    v.unwrap()
-                })
+                .map(|v| v.unwrap())
                 .collect::<String>()
                 .parse::<u64>()
                 .unwrap();
