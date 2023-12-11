@@ -1,7 +1,7 @@
-use regex::Regex;
+use std::collections::HashMap;
 
 fn load_input() -> String {
-    include_str!("../inputs/example2.txt").to_string()
+    include_str!("../inputs/part1.txt").to_string()
 }
 
 fn part1() {
@@ -37,49 +37,58 @@ fn part2() {
         .trim()
         .split("\n")
         .map(|l| {
-            let pat = Regex::new(
-                r#"([0-9])|(one)|(two)|(three)|(four)|(five)|(six)|(seven)|(eight)|(nine)|(zero)"#,
-            )
-            .unwrap();
-            let caps = pat
-                .captures_iter(l)
-                .map(|c| c.extract())
-                .map(|(_, [c])| c)
-                .collect::<Vec<_>>();
+            let mut i = 0;
+            let mut first: Option<char> = None;
+            let mut last: Option<char> = None;
+            while i < l.len() {
+                let subs = &l[i..];
+                i += 1;
+                let mut c = subs.chars().next().unwrap();
+                if !c.is_ascii_digit() {
+                    let num_hash = HashMap::from([
+                        ("zero", '0'),
+                        ("one", '1'),
+                        ("two", '2'),
+                        ("three", '3'),
+                        ("four", '4'),
+                        ("five", '5'),
+                        ("six", '6'),
+                        ("seven", '7'),
+                        ("eight", '8'),
+                        ("nine", '9'),
+                    ]);
 
-            let first = *caps.first().expect("Should have a match.");
-            let last = *caps.last().expect("Should have a match");
+                    let found = num_hash.keys().find(|s| subs.starts_with(&s.to_string()));
+
+                    match found {
+                        Some(nc) => c = *num_hash.get(*nc).unwrap(),
+                        _ => continue,
+                    }
+                }
+
+                if first.is_none() {
+                    first = Some(c);
+                }
+
+                last = Some(c);
+            }
 
             let res: u64 = vec![first, last]
                 .iter()
-                .map(|p| match p {
-                    &"0" => "0",
-                    &"1" | &"one" => "1",
-                    &"2" | &"two" => "2",
-                    &"3" | &"three" => "3",
-                    &"4" | &"four" => "4",
-                    &"5" | &"five" => "5",
-                    &"6" | &"six" => "6",
-                    &"7" | &"seven" => "7",
-                    &"8" | &"eight" => "8",
-                    &"9" | &"nine" => "9",
-                    _ => panic!("Got non number digit."),
-                })
                 .map(|v| {
                     // println!("Joined: {}\n\n", v);
-                    v
+                    v.unwrap()
                 })
                 .collect::<String>()
                 .parse::<u64>()
                 .unwrap();
 
-            println!("{}|{} = {}\t\t\t{}", first, last, res, l);
             res
         })
         .sum();
     println!("Part 2 Solution: {}", answer);
 }
 fn main() {
-    // part1();
+    part1();
     part2();
 }
