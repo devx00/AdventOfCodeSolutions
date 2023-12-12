@@ -221,22 +221,6 @@ impl FromStr for Board {
 }
 
 impl Board {
-    fn start(&mut self) -> Result<(), &'static str> {
-        if self.current_coordinate.is_some() {
-            return Err("Board already started.");
-        }
-
-        self.current_coordinate = match self.tiles.iter().flatten().find(|t| match t.entity {
-            Entity::Start => true,
-            _ => false,
-        }) {
-            Some(tile) => Some(tile.coordinates.clone()),
-            _ => None,
-        };
-
-        Ok(())
-    }
-
     fn restart(&mut self) -> Result<(), &'static str> {
         self.current_coordinate = match self.tiles.iter().flatten().find(|t| match t.entity {
             Entity::Start => true,
@@ -478,19 +462,6 @@ impl Board {
     }
 }
 
-// impl fmt::Display for Board {
-//     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-//         write!(f, "\n").ok();
-//         self.tiles.iter().for_each(|l| {
-//             l.iter().for_each(|t| {
-//                 write!(f, "{}", t.char_representation()).ok();
-//             });
-//             write!(f, "\n").ok();
-//         });
-//         write!(f, "\n")
-//     }
-// }
-
 fn load_board() -> Board {
     include_str!("../inputs/part1.txt")
         .parse::<Board>()
@@ -505,39 +476,7 @@ fn part1() {
     println!("Part 1 Answer: {}", answer);
 }
 
-fn char_for_coords(board: &Board, c: Coordinates) -> char {
-    if board.is_vertical(c) {
-        return '|';
-    }
-    if board.is_horizontal(c) {
-        return '-';
-    }
-
-    'x'
-}
-
 fn print_rep(board: &Board, mloop: &Vec<Coordinates>, enclosed: &Vec<Coordinates>) {
-    // let rep = board
-    //     .tiles
-    //     .iter()
-    //     .map(|l| {
-    //         l.iter()
-    //             .map(|t| {
-    //                 if mloop.contains(&t.coordinates) {
-    //                     char_for_coords(board, t.coordinates)
-    //                 } else {
-    //                     if enclosed.contains(&t.coordinates) {
-    //                         '*'
-    //                     } else {
-    //                         '.'
-    //                     }
-    //                 }
-    //             })
-    //             .collect::<String>()
-    //     })
-    //     .collect::<Vec<String>>()
-    //     .join("\n");
-    //
     let rep = board.str_rep(mloop, enclosed);
     println!("{}", rep);
 }
