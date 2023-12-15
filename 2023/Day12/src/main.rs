@@ -1,7 +1,9 @@
 use itertools::Itertools;
-use log::{debug, info, LevelFilter};
+use log::{debug, info, trace, LevelFilter};
 use std::cell::RefCell;
 use std::collections::HashMap;
+
+use env_logger::Env;
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone, PartialOrd, Ord)]
 enum RecordType {
@@ -78,6 +80,7 @@ struct InputData {
     records: Vec<RecordType>,
     groups: Vec<usize>,
     position_cache: RefCell<HashMap<EvaluationPosition, usize>>,
+    arrangement_cache: RefCell<HashMap<EvaluationPosition, Vec<Vec<EvaluationPosition>>>>,
 }
 impl InputData {
     fn new(records: Vec<RecordType>, groups: Vec<usize>) -> InputData {
@@ -85,6 +88,7 @@ impl InputData {
             records,
             groups,
             position_cache: RefCell::new(HashMap::new()),
+            arrangement_cache: RefCell::new(HashMap::new()),
         }
     }
 
@@ -111,7 +115,7 @@ impl InputData {
         self.records
             .iter()
             .enumerate()
-            .group_by(|(i, r)| **r == RecordType::Broken)
+            .group_by(|(_i, r)| **r == RecordType::Broken)
             .into_iter()
             .filter_map(|(is_match, group)| {
                 if is_match == false {
@@ -177,9 +181,60 @@ impl InputData {
         })
     }
 
+    fn possible_arrangements(
+        &self,
+        start_position: EvaluationPosition,
+    ) -> Vec<Vec<EvaluationPosition>> {
+        if let Some(cache_hit) = self.arrangement_cache.borrow().get(&start_position) {
+            trace!("Cache Hit!: {:?}", start_position);
+            return cache_hit.clone();
+        }
+
+        let possible_positions = self.possible_positions(start_position);
+        let possible_count = possible_positions.clone().count();
+        let value: Vec<Vec<EvaluationPosition>> =
+            if start_position.group_index == self.groups.len() - 1 {
+                possible_positions.map(|p| vec![p]).collect()
+            } else {
+                possible_positions
+                    .map(|pos| {
+                        debug!(
+                        "Calculating num arrangements for position: {:?} from position: {:?} '{}'",
+                        pos,
+                        start_position,
+                        start_position.get_records_string(&self)
+                    );
+                        let mut arrangements = self.possible_arrangements(pos);
+                        arrangements
+                            .iter_mut()
+                            .for_each(|arr| arr.insert(0, pos.clone()));
+                        arrangements
+                    })
+                    .concat()
+                    .into_iter()
+                    .dedup()
+                    .collect()
+            };
+
+        if value.len() == 0 {
+            debug!(
+                "Found 0/{} possible positions for group: [{}] {} evaluated from location: {} '{}'",
+                possible_count,
+                start_position.group_index,
+                self.groups[start_position.group_index],
+                start_position.record_index,
+                start_position.get_records_string(&self)
+            );
+        }
+        self.arrangement_cache
+            .borrow_mut()
+            .insert(start_position, value.clone());
+        value
+    }
+
     fn num_arrangements(&self, start_position: EvaluationPosition) -> usize {
         if let Some(cache_hit) = self.position_cache.borrow().get(&start_position) {
-            // debug!("Cache Hit!: {:?}", start_position);
+            trace!("Cache Hit!: {:?}", start_position);
             return cache_hit.clone();
         }
 
@@ -191,8 +246,10 @@ impl InputData {
             possible_positions
                 .map(|pos| {
                     debug!(
-                        "Calculating num arrangements for position: {:?} from position: {:?}",
-                        pos, start_position
+                        "Calculating num arrangements for position: {:?} from position: {:?} '{}'",
+                        pos,
+                        start_position,
+                        start_position.get_records_string(&self)
                     );
                     self.num_arrangements(pos)
                 })
@@ -288,7 +345,7 @@ fn num_variants(
 }
 
 fn part1() {
-    let input = include_str!("../inputs/part1.txt");
+    let input = include_str!("../inputs/debug2.txt");
 
     let result: usize = input
         .lines()
@@ -309,13 +366,24 @@ fn part1() {
                     .collect::<Vec<usize>>(),
             )
         })
-        .map(|(r, g)| num_variants(r, g, 1))
+        .map(|(r, g)| {
+            let nvariants = num_variants(r.clone(), g.clone(), 1);
+
+            println!(
+                "{}, {:?} ==> {}",
+                r.iter().map(|r| r.to_string()).collect::<String>(),
+                g,
+                nvariants
+            );
+
+            nvariants
+        })
         .sum();
 
     info!("Part 1 Result {:?}", result);
 }
 fn part2() {
-    let input = include_str!("../inputs/example2.txt");
+    let input = include_str!("../inputs/debug2.txt");
 
     let result: usize = input
         .lines()
@@ -337,20 +405,32 @@ fn part2() {
             )
         })
         .map(|rec| {
-            let nvariants = rec.num_arrangements(EvaluationPosition::start());
-            info!(
-                "{} ==> {:?}",
+            let variants = rec.possible_arrangements(EvaluationPosition::start());
+            println!(
+                "{}, {:?} ==> {}",
                 EvaluationPosition::start().get_records_string(&rec),
-                nvariants
+                rec.groups,
+                variants.len()
             );
 
-            nvariants
+            variants.iter().for_each(|v| {
+                info!(
+                    "Variant: {:?}",
+                    v.iter().map(|pos| pos.record_index).collect::<Vec<_>>()
+                )
+            });
+
+            variants.len()
         })
         .sum();
 
-    info!("Part 1 Result {:?}", result);
+    info!("Part 2 Result {:?}", result);
 }
 fn main() {
-    log::set_max_level(LevelFilter::Info);
+    let env = Env::default().filter_or("MY_LOG_LEVEL", "info");
+
+    env_logger::init_from_env(env);
+    log::set_max_level(LevelFilter::Debug);
+    part1();
     part2();
 }
