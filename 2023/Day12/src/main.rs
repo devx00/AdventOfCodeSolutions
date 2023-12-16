@@ -2,6 +2,7 @@ use itertools::Itertools;
 use log::{debug, info, trace, LevelFilter};
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::ops::Range;
 
 use env_logger::Env;
 
@@ -60,8 +61,26 @@ impl EvaluationPosition {
             .map(|r| r.to_string())
             .join("")
     }
+
+    fn group_range(&self, width: usize) -> Range<usize> {
+        self.record_index..self.record_index + width
+    }
+
+    fn fully_contains(&self, width: usize, group: BrokenGroup) -> bool {
+        let res = group
+            .group_range()
+            .all(|i| self.group_range(width).contains(&i));
+        debug!(
+            "{:?} fully contains {:?}? ==> {}",
+            self.group_range(width),
+            group.group_range(),
+            res
+        );
+        res
+    }
 }
 
+#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
 struct BrokenGroup {
     start_index: usize,
     length: usize,
@@ -73,6 +92,10 @@ impl BrokenGroup {
             start_index,
             length,
         }
+    }
+
+    fn group_range(&self) -> Range<usize> {
+        self.start_index..self.start_index + self.length
     }
 }
 
@@ -143,15 +166,16 @@ impl InputData {
         let end_index = self.last_index(from_position);
         debug!("{:?} ends @ {}", from_position, end_index);
         (from_position.record_index..end_index + 1).filter_map(move |i| {
-            if self
-                .records
-                .iter()
-                .skip(i)
-                .take(self.groups[from_position.group_index])
-                .all(|r| match r {
-                    RecordType::Unknown | RecordType::Broken => true,
-                    _ => false,
-                })
+            if i + self.groups[from_position.group_index] <= self.records.len()
+                && self
+                    .records
+                    .iter()
+                    .skip(i)
+                    .take(self.groups[from_position.group_index])
+                    .all(|r| match r {
+                        RecordType::Unknown | RecordType::Broken => true,
+                        _ => false,
+                    })
                 && match self
                     .records
                     .iter()
@@ -166,10 +190,7 @@ impl InputData {
                     "Broken Group of Len: {} valid at index: {}",
                     self.groups[from_position.group_index], i
                 );
-                Some(EvaluationPosition::new(
-                    i + self.groups[from_position.group_index] + 1,
-                    from_position.group_index + 1,
-                ))
+                Some(EvaluationPosition::new(i, from_position.group_index))
             } else {
                 debug!(
                     "Doesnt fit: {}, {:?}",
@@ -204,7 +225,10 @@ impl InputData {
                         start_position,
                         start_position.get_records_string(&self)
                     );
-                        let mut arrangements = self.possible_arrangements(pos);
+                        let mut arrangements = self.possible_arrangements(EvaluationPosition::new(
+                            pos.record_index + self.groups[pos.group_index] + 1,
+                            pos.group_index + 1,
+                        ));
                         arrangements
                             .iter_mut()
                             .for_each(|arr| arr.insert(0, pos.clone()));
@@ -345,7 +369,7 @@ fn num_variants(
 }
 
 fn part1() {
-    let input = include_str!("../inputs/debug2.txt");
+    let input = include_str!("../inputs/part1.txt");
 
     let result: usize = input
         .lines()
@@ -369,7 +393,7 @@ fn part1() {
         .map(|(r, g)| {
             let nvariants = num_variants(r.clone(), g.clone(), 1);
 
-            println!(
+            debug!(
                 "{}, {:?} ==> {}",
                 r.iter().map(|r| r.to_string()).collect::<String>(),
                 g,
@@ -383,7 +407,7 @@ fn part1() {
     info!("Part 1 Result {:?}", result);
 }
 fn part2() {
-    let input = include_str!("../inputs/debug2.txt");
+    let input = include_str!("../inputs/part2.txt");
 
     let result: usize = input
         .lines()
@@ -405,22 +429,40 @@ fn part2() {
             )
         })
         .map(|rec| {
-            let variants = rec.possible_arrangements(EvaluationPosition::start());
-            println!(
-                "{}, {:?} ==> {}",
-                EvaluationPosition::start().get_records_string(&rec),
-                rec.groups,
-                variants.len()
-            );
-
-            variants.iter().for_each(|v| {
-                info!(
-                    "Variant: {:?}",
-                    v.iter().map(|pos| pos.record_index).collect::<Vec<_>>()
-                )
+            let binding = rec.possible_arrangements(EvaluationPosition::start());
+            let variant = binding.iter().filter(|variant_positions| {
+                rec.known_broken_groups()
+                    .into_iter()
+                    .filter(|known_broken_group| {
+                        !variant_positions
+                            .into_iter()
+                            .find(|pos| {
+                                pos.fully_contains(
+                                    rec.groups[pos.group_index],
+                                    known_broken_group.clone(),
+                                )
+                            })
+                            .is_some()
+                    })
+                    .count()
+                    == 0
             });
+            // .count()
+            // .collect();
+            // variants.clone().iter().for_each(|v| {
+            //     debug!(
+            //         "Variant: {:?}",
+            //         v.iter().map(|pos| pos.record_index).collect::<Vec<_>>()
+            //     )
+            // });
+            // debug!(
+            //     "{}, {:?} ==> {}",
+            //     EvaluationPosition::start().get_records_string(&rec),
+            //     rec.groups,
+            //     variants.len()
+            // );
 
-            variants.len()
+            variant.count()
         })
         .sum();
 
@@ -431,6 +473,6 @@ fn main() {
 
     env_logger::init_from_env(env);
     log::set_max_level(LevelFilter::Debug);
-    part1();
+    // part1();
     part2();
 }
