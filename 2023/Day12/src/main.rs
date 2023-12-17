@@ -103,7 +103,7 @@ struct InputData {
     records: Vec<RecordType>,
     groups: Vec<usize>,
     position_cache: RefCell<HashMap<EvaluationPosition, usize>>,
-    arrangement_cache: RefCell<HashMap<EvaluationPosition, Vec<Vec<EvaluationPosition>>>>,
+    arrangement_cache: RefCell<HashMap<EvaluationPosition, Vec<EvaluationPosition>>>,
 }
 impl InputData {
     fn new(records: Vec<RecordType>, groups: Vec<usize>) -> InputData {
@@ -205,17 +205,17 @@ impl InputData {
     fn possible_arrangements(
         &self,
         start_position: EvaluationPosition,
-    ) -> Vec<Vec<EvaluationPosition>> {
+    ) -> &Vec<Vec<EvaluationPosition>> {
         if let Some(cache_hit) = self.arrangement_cache.borrow().get(&start_position) {
             trace!("Cache Hit!: {:?}", start_position);
-            return cache_hit.clone();
+            return cache_hit;
         }
 
         let possible_positions = self.possible_positions(start_position);
         let possible_count = possible_positions.clone().count();
-        let value: Vec<Vec<EvaluationPosition>> =
+        let value: Vec<&&Vec<EvaluationPosition>> =
             if start_position.group_index == self.groups.len() - 1 {
-                possible_positions.map(|p| vec![p]).collect()
+                possible_positions.map(|p| &&vec![p]).collect()
             } else {
                 possible_positions
                     .map(|pos| {
@@ -235,7 +235,7 @@ impl InputData {
                         arrangements
                     })
                     .concat()
-                    .into_iter()
+                    .iter()
                     .dedup()
                     .collect()
             };
@@ -252,8 +252,8 @@ impl InputData {
         }
         self.arrangement_cache
             .borrow_mut()
-            .insert(start_position, value.clone());
-        value
+            .insert(start_position, &value);
+        &value
     }
 
     fn num_arrangements(&self, start_position: EvaluationPosition) -> usize {
@@ -430,23 +430,27 @@ fn part2() {
         })
         .map(|rec| {
             let binding = rec.possible_arrangements(EvaluationPosition::start());
-            let variant = binding.iter().filter(|variant_positions| {
-                rec.known_broken_groups()
-                    .into_iter()
-                    .filter(|known_broken_group| {
-                        !variant_positions
-                            .into_iter()
-                            .find(|pos| {
-                                pos.fully_contains(
-                                    rec.groups[pos.group_index],
-                                    known_broken_group.clone(),
-                                )
-                            })
-                            .is_some()
-                    })
-                    .count()
-                    == 0
-            });
+            rec.position_cache.borrow_mut().clear();
+            let variants: Vec<&&Vec<EvaluationPosition>> = binding
+                .into_iter()
+                .filter(|variant_positions| {
+                    rec.known_broken_groups()
+                        .into_iter()
+                        .filter(|known_broken_group| {
+                            !variant_positions
+                                .into_iter()
+                                .find(|pos| {
+                                    pos.fully_contains(
+                                        rec.groups[pos.group_index],
+                                        known_broken_group.clone(),
+                                    )
+                                })
+                                .is_some()
+                        })
+                        .count()
+                        == 0
+                })
+                .collect();
             // .count()
             // .collect();
             // variants.clone().iter().for_each(|v| {
@@ -455,14 +459,16 @@ fn part2() {
             //         v.iter().map(|pos| pos.record_index).collect::<Vec<_>>()
             //     )
             // });
-            // debug!(
-            //     "{}, {:?} ==> {}",
-            //     EvaluationPosition::start().get_records_string(&rec),
-            //     rec.groups,
-            //     variants.len()
-            // );
+            // let count = variants.count();
+            info!(
+                "{}, {:?} ==> {}",
+                EvaluationPosition::start().get_records_string(&rec),
+                rec.groups,
+                variants.len()
+            );
 
-            variant.count()
+            // variants.count()
+            variants.len()
         })
         .sum();
 
