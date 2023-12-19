@@ -1,8 +1,10 @@
 use itertools::Itertools;
 use std::{
     cell::RefCell,
+    collections::HashMap,
     fs::File,
     io::{BufReader, Read},
+    num,
     str::FromStr,
 };
 
@@ -44,6 +46,27 @@ enum CardinalDirection {
 #[derive(Debug, Clone)]
 struct Platform {
     items: Vec<Vec<RefCell<Rock>>>,
+    cycle_tracker: Option<CycleTracker>,
+}
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct PlatformState {
+    item_runs: Vec<(usize, Rock)>,
+}
+#[derive(Debug, Clone)]
+struct CycleTracker {
+    num_cycles: usize,
+    seen_states: HashMap<PlatformState, usize>,
+    before_period: usize,
+}
+
+impl CycleTracker {
+    fn new() -> Self {
+        CycleTracker {
+            num_cycles: 0,
+            seen_states: HashMap::new(),
+            before_period: 0,
+        }
+    }
 }
 
 impl Platform {
@@ -53,60 +76,22 @@ impl Platform {
     fn num_rows(&self) -> usize {
         self.items.len()
     }
-    fn column(&self, column: usize) -> impl Iterator<Item = &RefCell<Rock>> + '_ {
-        self.items.iter().map(move |row| &row[column])
-    }
-
-    fn row(&self, row: usize) -> impl Iterator<Item = &RefCell<Rock>> + '_ {
-        self.items[row].iter()
-    }
-
-    fn rows(&self) -> impl Iterator<Item = impl Iterator<Item = &RefCell<Rock>>> {
-        self.items.iter().map(|r| r.iter())
-    }
 
     fn sort_direction(&self, cells: Vec<&RefCell<Rock>>, direction: CardinalDirection) {
-        let items = cells.iter().map(|c| *c.borrow()).collect::<Vec<Rock>>();
-        // let item_iter = items.iter();
-        // let item_iter = self.items.iter().map(|r| r[index].borrow().clone());
-        let mut sorted_parts: Vec<Rock> = vec![];
-        let mut sortable = vec![];
-        let mut rest = items.clone();
-        // let (mut squares, mut others): (Vec<&Rock>, Vec<&Rock>) =
-        //     item_iter.clone().partition(|item| **item == Rock::Square);
-        while sortable.len() > 0 || rest.len() > 0 {
-            // let mut sortable: Vec<&Rock> = item_iter
-            //     .clone()
-            //     .take_while(|item| **item == Rock::Square)
-            //     .collect::<Vec<&Rock>>();
-            //
-            let (non_squares, rest_others): (Vec<Rock>, Vec<Rock>) = rest
-                .clone()
-                .into_iter()
-                .partition(|item| *item != Rock::Square);
-            sortable.extend_from_slice(&non_squares);
-            println!("Sortable: {:?}", sortable);
-            println!("Rest: {:?}", rest_others);
-            sortable.sort_by(|a: &Rock, b: &Rock| match direction {
-                CardinalDirection::North | CardinalDirection::West => b.cmp(a),
-                CardinalDirection::South | CardinalDirection::East => a.cmp(b),
-            });
-
-            sorted_parts.extend_from_slice(&sortable);
-            let (squares, non_squares_others): (Vec<Rock>, Vec<Rock>) = rest_others
-                .clone()
-                .into_iter()
-                .partition(|item| *item == Rock::Square);
-            rest = non_squares_others;
-            println!("Squares: {:?}", squares);
-            sorted_parts.extend_from_slice(&squares);
-            println!("sorted_parts: {:?}", sorted_parts);
-        }
-
         cells
             .iter()
-            .zip(sorted_parts.iter())
-            .for_each(|(rc, r)| *rc.borrow_mut() = *r);
+            .map(|c| *c.borrow())
+            .group_by(|r| *r != Rock::Square)
+            .into_iter()
+            .map(|(_, vals)| {
+                vals.sorted_by(|a, b| match direction {
+                    CardinalDirection::North | CardinalDirection::West => a.cmp(b),
+                    CardinalDirection::South | CardinalDirection::East => b.cmp(a),
+                })
+            })
+            .flatten()
+            .zip(cells.iter())
+            .for_each(|(r, rc)| *rc.borrow_mut() = r)
     }
 
     fn tilt(&self, direction: CardinalDirection) {
@@ -126,7 +111,12 @@ impl Platform {
             }
         }
     }
+    #[allow(dead_code)]
     fn print(&self) {
+        println!(
+            "{}",
+            (0..self.items.first().unwrap().len()).map(|_| "-").join("")
+        );
         self.items.iter().for_each(|r| {
             println!(
                 "{}",
@@ -134,7 +124,89 @@ impl Platform {
                     .map(|i| (*i.borrow()).to_string())
                     .collect::<String>()
             );
+        });
+        println!("Total Load: {}", self.total_load());
+    }
+
+    fn total_load(&self) -> usize {
+        let difference = self.num_rows();
+        self.items.iter().enumerate().fold(0, |acc, (i, row)| {
+            let multiplier = difference - i;
+            acc + multiplier * row.iter().filter(|rc| *rc.borrow() == Rock::Round).count()
         })
+    }
+
+    fn state(&self) -> PlatformState {
+        PlatformState {
+            item_runs: self
+                .items
+                .clone()
+                .into_iter()
+                .flatten()
+                .group_by(|rc| *rc.borrow())
+                .into_iter()
+                .map(|(group, elems)| (elems.count(), group))
+                .collect::<Vec<(usize, Rock)>>(),
+        }
+    }
+
+    fn cycle(&self) {
+        [
+            CardinalDirection::North,
+            CardinalDirection::West,
+            CardinalDirection::South,
+            CardinalDirection::East,
+        ]
+        .into_iter()
+        .for_each(|direction| self.tilt(direction));
+
+        // self.print();
+    }
+
+    fn determine_cycle_period(&mut self, max_cycles: usize) -> (usize, usize) {
+        match &self.cycle_tracker {
+            Some(tracker) => (tracker.num_cycles, tracker.before_period),
+            None => {
+                let tracker_cell = RefCell::new(CycleTracker::new());
+                while !tracker_cell
+                    .borrow()
+                    .seen_states
+                    .contains_key(&self.state())
+                    && tracker_cell.borrow().num_cycles < max_cycles
+                {
+                    let num_cycles = tracker_cell.borrow().num_cycles;
+                    let mut tc = tracker_cell.borrow_mut();
+                    tc.seen_states.insert(self.state(), num_cycles);
+                    tc.num_cycles += 1;
+                    self.cycle();
+                }
+                let num_cycles = tracker_cell.borrow().num_cycles;
+
+                if num_cycles == max_cycles {
+                    return (num_cycles, 0);
+                }
+
+                let before_period = tracker_cell
+                    .borrow()
+                    .seen_states
+                    .get(&self.state())
+                    .expect("Should exist since we exited the loop.")
+                    .clone();
+                tracker_cell.borrow_mut().before_period = before_period;
+
+                self.cycle_tracker = Some(tracker_cell.borrow().clone());
+                (num_cycles - before_period, before_period)
+            }
+        }
+    }
+
+    fn cycle_n(&mut self, num_cycles: usize) {
+        let (cycle_period, before_period) = self.determine_cycle_period(num_cycles);
+        println!("Cycle Period: {}", cycle_period);
+        let remaining = (num_cycles - before_period) % cycle_period;
+
+        println!("Remaining: {}", remaining);
+        (0..remaining).for_each(|_| self.cycle());
     }
 }
 
@@ -151,6 +223,7 @@ impl FromStr for Platform {
                         .collect::<Vec<RefCell<Rock>>>()
                 })
                 .collect(),
+            cycle_tracker: None,
         })
     }
 }
@@ -165,18 +238,21 @@ fn load_input(input_name: &str) -> String {
 }
 
 fn part1() {
-    let input = load_input("example1.txt");
+    let input = load_input("part1.txt");
     let platform = input.parse::<Platform>().unwrap();
-    platform.print();
     platform.tilt(CardinalDirection::North);
-    platform.print();
-    let result = platform.items.iter().map(|r| r.len()).count();
+    let result = platform.total_load();
 
     println!("Part 1 Result: {}", result);
 }
 
 fn part2() {
-    ()
+    let input = load_input("part1.txt");
+    let mut platform = input.parse::<Platform>().unwrap();
+    platform.cycle_n(1000000000);
+    let result = platform.total_load();
+
+    println!("Part 2 Result: {}", result);
 }
 
 fn main() {
