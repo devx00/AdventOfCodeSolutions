@@ -324,6 +324,7 @@ impl Grid {
             .fold(0, |acc, val| acc.max(val))
     }
 
+    #[allow(dead_code)]
     fn print_energized(&self) {
         let repr = self
             .nodes
