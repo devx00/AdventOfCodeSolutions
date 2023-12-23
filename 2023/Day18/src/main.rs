@@ -572,123 +572,26 @@ impl InstructionsState {
         self.cursor = Position(min_position.row().abs(), min_position.column().abs());
     }
 
-    fn process_instruction(&mut self, instruction: &mut Instruction) {
+    fn process_instruction(&mut self, instruction: Instruction) {
         println!(
             "\n\nProcessing: {:?} {}",
             instruction.direction, instruction.distance
         );
 
-        if self.vertical_stack.len() == 0 {
-            match instruction.direction {
-                Direction::Up | Direction::Down => self.positive_direction = instruction.direction,
-                _ => (),
-            }
-        }
-
-        match instruction.direction {
-            Direction::Left | Direction::Right => {
-                match self.skip_horizontal_if {
-                    Some(skip_direction) => {
-                        if skip_direction != instruction.direction {
-                            self.filled_cubes += instruction.distance;
-                        }
-                    }
-                    _ => self.filled_cubes += instruction.distance,
-                }
-                self.skip_horizontal_if = None;
-                self.cursor
-                    .step(instruction.direction, instruction.distance);
-            }
-            direction if direction == self.positive_direction => {
-                println!(
-                    "Matched Positive Direction: instruction: {:?}, positive direction: {:?}",
-                    direction, self.positive_direction
-                );
-                let vertical_edge = VerticalEdge::new(self.cursor.column(), instruction.distance);
-                self.cursor.step(direction, instruction.distance);
-                // Add 1 to account for block that overlaps with the previous horizontal line.
-                self.filled_cubes += instruction.distance;
-                self.prev_vertical = Some(instruction.direction);
-                self.vertical_stack.push(vertical_edge)
-            }
-            direction if direction != self.positive_direction => {
-                println!(
-                    "Matched Non-Positive Direction: instruction: {:?}, positive direction: {:?}",
-                    direction, self.positive_direction
-                );
-                while let Some(mut opposing_edge) = self.vertical_stack.pop() {
-                    println!(
-                        "Processing Opposing Edge: {:?} for instruction: {:?}",
-                        opposing_edge, instruction
-                    );
-                    if instruction.distance == 0 {
-                        self.vertical_stack.push(opposing_edge);
-                        break;
-                    }
-                    if instruction.distance >= opposing_edge.length && self.vertical_stack.len() > 0
-                    {
-                        let next_vert = self.vertical_stack.last_mut().unwrap();
-                        if self.cursor.column().abs_diff(next_vert.column)
-                            < self.cursor.column().abs_diff(opposing_edge.column)
-                        {
-                            opposing_edge.length -= 1;
-                            next_vert.length += 1;
-                        } else {
-                            next_vert.length -= 1;
-                            // opposing_edge.length += 1;
-                        }
-                    }
-
-                    let width: isize = opposing_edge.column.sub(self.cursor.column()).abs(); // Add 1 to account for width of other edge.
-                    self.skip_horizontal_if =
-                        Some(match self.cursor.column().cmp(&opposing_edge.column) {
-                            Greater => Direction::Left,
-                            Less => Direction::Right,
-                            _ => panic!("Should never be the same column!"),
-                        });
-
-                    let step_distance = match instruction.distance.cmp(&opposing_edge.length) {
-                        Greater => {
-                            let vert_distance = opposing_edge.length;
-                            instruction.distance -= opposing_edge.length;
-                            opposing_edge.length = 0;
-                            vert_distance
-                        }
-                        Less | Equal => {
-                            let vert_distance = instruction.distance;
-                            opposing_edge.length -= instruction.distance;
-                            instruction.distance = 0;
-                            vert_distance
-                        }
-                    };
-                    self.filled_cubes += width * step_distance; // Add 1 for the block which
-                                                                // overlaps the subsequent horizontal row.
-
-                    self.cursor.step(direction, step_distance);
-
-                    if opposing_edge.length > 0 {
-                        self.vertical_stack.push(opposing_edge);
-                    }
-                    if instruction.distance == 0 {
-                        break;
-                    }
-                    if self.vertical_stack.len() == 0 {
-                        self.process_instruction(instruction);
-                        break;
-                    }
-                }
-            }
-            _ => panic!("Shouldnt reach here!"),
-        }
+        let before = self.cursor.clone();
+        self.cursor
+            .step(instruction.direction, instruction.distance);
+        self.filled_cubes +=
+            (before.column() * self.cursor.row()) - (before.row() * self.cursor.column());
     }
     fn process_instructions(&mut self, instructions: Vec<Instruction>) -> isize {
         self.normalize_cursor(&instructions);
-        for mut instruction in instructions {
-            self.process_instruction(&mut instruction);
+        for instruction in instructions {
+            self.process_instruction(instruction);
             self.print();
         }
 
-        self.filled_cubes
+        self.filled_cubes / 2
     }
     fn print(&self) {
         println!("Cursor: {:?}", self.cursor);
