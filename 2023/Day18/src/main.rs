@@ -1,9 +1,11 @@
 use colored::{ColoredString, Colorize};
 use std::{
+    borrow::BorrowMut,
+    cmp::Ordering::{Equal, Greater, Less},
     collections::HashMap,
     fs::File,
     io::{BufReader, Read},
-    ops::{Index, IndexMut},
+    ops::{Index, IndexMut, Sub},
     str::FromStr,
 };
 
@@ -116,6 +118,12 @@ struct PlotDimensions(isize, isize);
 struct Position(isize, isize);
 
 impl Position {
+    fn row(&self) -> isize {
+        self.0
+    }
+    fn column(&self) -> isize {
+        self.1
+    }
     fn update_max(&mut self, other: Position) {
         self.0 = self.0.max(other.0);
         self.1 = self.1.max(other.1);
@@ -482,7 +490,18 @@ impl FromStr for Plot {
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
-struct Instruction(Direction, isize);
+struct Instruction {
+    direction: Direction,
+    distance: isize,
+}
+impl Instruction {
+    fn new(direction: Direction, distance: isize) -> Self {
+        Self {
+            direction,
+            distance,
+        }
+    }
+}
 
 impl FromStr for Instruction {
     type Err = ();
@@ -499,21 +518,33 @@ impl FromStr for Instruction {
 
         let distance = isize::from_str_radix(&distance_hex, 16).unwrap();
 
-        Ok(Instruction(dir, distance))
+        Ok(Instruction::new(dir, distance))
+    }
+}
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
+struct VerticalEdge {
+    column: isize,
+    length: isize,
+}
+impl VerticalEdge {
+    fn new(column: isize, length: isize) -> Self {
+        Self { column, length }
     }
 }
 
 struct InstructionsState {
     cursor: Position,
-    vertical_stack: Vec<(Position, Position)>,
+    vertical_stack: Vec<VerticalEdge>,
+    // Positive direction means the vertical direction (Up or Down) which causes values to be added to the vertical stack
+    // as opposed to the non-positive direction which causes values to be popped from the stack and
+    // added to the filled_cubes counter. This is initialy the first encountered vertical direction
+    // but will change when more distance has been covered in the opposite direction, in which case
+    // the vertical stack will have been exhaussted and will need to start being filled again.
     positive_direction: Direction,
     filled_cubes: isize,
-    prev_vert: Direction,
-    prev_horiz: Direction,
-    saw_vert_inflection: bool,
-    saw_horiz_inflection: bool,
-    vert_inflections_left: usize,
-    horiz_inflections_left: usize,
+    skip_horizontal_if: Option<Direction>,
+    prev_vertical: Option<Direction>,
 }
 
 impl InstructionsState {
@@ -523,137 +554,137 @@ impl InstructionsState {
             vertical_stack: vec![],
             positive_direction: Direction::Down,
             filled_cubes: 0,
-            prev_vert: Direction::Down,
-            prev_horiz: Direction::Right,
-            saw_vert_inflection: false,
-            saw_horiz_inflection: false,
-            vert_inflections_left: 1,
-            horiz_inflections_left: 1,
+            skip_horizontal_if: None,
+            prev_vertical: None,
         }
     }
 
-    fn process_instruction(&mut self, instruction: Instruction) {
-        let Instruction(direction, distance) = instruction;
-        println!("\n\nProcessing: {:?} {}", direction, distance);
-        match direction {
-            Direction::Up | Direction::Down => {
-                if self.prev_vert != direction {
-                    self.saw_vert_inflection = true;
-                    self.prev_vert = direction;
-                }
-            }
-            Direction::Left | Direction::Right => {
-                if self.prev_horiz != direction {
-                    self.saw_horiz_inflection = true;
-                    self.prev_horiz = direction;
-                }
+    fn normalize_cursor(&mut self, instructions: &Vec<Instruction>) {
+        let mut min_position = Position::default();
+        for instruction in instructions {
+            self.cursor
+                .step(instruction.direction, instruction.distance);
+            min_position = Position(
+                min_position.row().min(self.cursor.row()),
+                min_position.column().min(self.cursor.column()),
+            );
+        }
+        self.cursor = Position(min_position.row().abs(), min_position.column().abs());
+    }
+
+    fn process_instruction(&mut self, instruction: &mut Instruction) {
+        println!(
+            "\n\nProcessing: {:?} {}",
+            instruction.direction, instruction.distance
+        );
+
+        if self.vertical_stack.len() == 0 {
+            match instruction.direction {
+                Direction::Up | Direction::Down => self.positive_direction = instruction.direction,
+                _ => (),
             }
         }
 
-        match direction {
+        match instruction.direction {
             Direction::Left | Direction::Right => {
-                // self.filled_cubes += distance;
-                self.cursor.step(direction, distance);
+                match self.skip_horizontal_if {
+                    Some(skip_direction) => {
+                        if skip_direction != instruction.direction {
+                            self.filled_cubes += instruction.distance;
+                        }
+                    }
+                    _ => self.filled_cubes += instruction.distance,
+                }
+                self.skip_horizontal_if = None;
+                self.cursor
+                    .step(instruction.direction, instruction.distance);
             }
             direction if direction == self.positive_direction => {
                 println!(
                     "Matched Positive Direction: instruction: {:?}, positive direction: {:?}",
                     direction, self.positive_direction
                 );
-                let start = self.cursor.clone();
-                self.cursor.step(direction, distance);
-                let end = self.cursor.clone();
-
-                if self.saw_vert_inflection && self.vert_inflections_left > 0 {
-                    self.filled_cubes += distance;
-                    self.vert_inflections_left -= 1;
-                    self.saw_vert_inflection = false;
-                }
-
-                self.vertical_stack.push((start, end));
+                let vertical_edge = VerticalEdge::new(self.cursor.column(), instruction.distance);
+                self.cursor.step(direction, instruction.distance);
+                // Add 1 to account for block that overlaps with the previous horizontal line.
+                self.filled_cubes += instruction.distance;
+                self.prev_vertical = Some(instruction.direction);
+                self.vertical_stack.push(vertical_edge)
             }
             direction if direction != self.positive_direction => {
                 println!(
                     "Matched Non-Positive Direction: instruction: {:?}, positive direction: {:?}",
                     direction, self.positive_direction
                 );
-                let mut vert_distance_left = distance;
-                while let Some((start, end)) = self.vertical_stack.pop() {
-                    if vert_distance_left == 0 {
-                        break;
-                    }
-                    let width: isize = start.1.abs_diff(self.cursor.1).try_into().unwrap();
-                    let available_vertical = start.0.abs_diff(end.0).try_into().unwrap();
-                    let start_fixed = match end.0 == self.cursor.0 {
-                        true => start.clone(),
-                        false => end.clone(),
-                    };
-
-                    let will_rollover = available_vertical > vert_distance_left;
-
-                    let vert_distance = vert_distance_left.min(available_vertical);
-                    self.filled_cubes += vert_distance * width;
-                    vert_distance_left -= vert_distance;
-
-                    self.cursor.step(direction, vert_distance);
-
-                    let end_fixed = Position(self.cursor.0, start_fixed.1);
-
-                    if will_rollover && start_fixed.0 != end_fixed.0 {
-                        self.vertical_stack.push((start_fixed, end_fixed));
-
-                        break;
-                    }
-                }
-
-                if vert_distance_left != 0 {
-                    assert_eq!(
-                        self.vertical_stack.len(),
-                        0,
-                        "Vertical stack should always be empty if we reach here."
+                while let Some(mut opposing_edge) = self.vertical_stack.pop() {
+                    println!(
+                        "Processing Opposing Edge: {:?} for instruction: {:?}",
+                        opposing_edge, instruction
                     );
+                    if instruction.distance == 0 {
+                        self.vertical_stack.push(opposing_edge);
+                        break;
+                    }
+                    if instruction.distance >= opposing_edge.length && self.vertical_stack.len() > 0
+                    {
+                        let next_vert = self.vertical_stack.last_mut().unwrap();
+                        if self.cursor.column().abs_diff(next_vert.column)
+                            < self.cursor.column().abs_diff(opposing_edge.column)
+                        {
+                            opposing_edge.length -= 1;
+                            next_vert.length += 1;
+                        } else {
+                            next_vert.length -= 1;
+                            // opposing_edge.length += 1;
+                        }
+                    }
 
-                    println!("Should be switching positive direction now!");
+                    let width: isize = opposing_edge.column.sub(self.cursor.column()).abs(); // Add 1 to account for width of other edge.
+                    self.skip_horizontal_if =
+                        Some(match self.cursor.column().cmp(&opposing_edge.column) {
+                            Greater => Direction::Left,
+                            Less => Direction::Right,
+                            _ => panic!("Should never be the same column!"),
+                        });
 
-                    self.positive_direction = match self.positive_direction {
-                        Direction::Up => Direction::Down,
-                        Direction::Down => Direction::Up,
-                        _ => panic!("Should only be up or down."),
+                    let step_distance = match instruction.distance.cmp(&opposing_edge.length) {
+                        Greater => {
+                            let vert_distance = opposing_edge.length;
+                            instruction.distance -= opposing_edge.length;
+                            opposing_edge.length = 0;
+                            vert_distance
+                        }
+                        Less | Equal => {
+                            let vert_distance = instruction.distance;
+                            opposing_edge.length -= instruction.distance;
+                            instruction.distance = 0;
+                            vert_distance
+                        }
                     };
+                    self.filled_cubes += width * step_distance; // Add 1 for the block which
+                                                                // overlaps the subsequent horizontal row.
 
-                    self.process_instruction(Instruction(direction, vert_distance_left));
+                    self.cursor.step(direction, step_distance);
+
+                    if opposing_edge.length > 0 {
+                        self.vertical_stack.push(opposing_edge);
+                    }
+                    if instruction.distance == 0 {
+                        break;
+                    }
+                    if self.vertical_stack.len() == 0 {
+                        self.process_instruction(instruction);
+                        break;
+                    }
                 }
             }
             _ => panic!("Shouldnt reach here!"),
         }
-
-        println!("-- End Processing --\n\n");
     }
     fn process_instructions(&mut self, instructions: Vec<Instruction>) -> isize {
-        let first_vert = instructions
-            .iter()
-            .map(|i| i.0)
-            .find(|d| match d {
-                Direction::Up | Direction::Down => true,
-                Direction::Right | Direction::Left => false,
-            })
-            .unwrap();
-        let first_horiz = instructions
-            .iter()
-            .map(|i| i.0)
-            .find(|d| match d {
-                Direction::Up | Direction::Down => false,
-                Direction::Right | Direction::Left => true,
-            })
-            .unwrap();
-
-        self.positive_direction = first_vert;
-
-        self.prev_vert = first_vert;
-        self.prev_horiz = first_horiz;
-        for instruction in instructions {
-            self.print();
-            self.process_instruction(instruction);
+        self.normalize_cursor(&instructions);
+        for mut instruction in instructions {
+            self.process_instruction(&mut instruction);
             self.print();
         }
 
@@ -664,45 +695,53 @@ impl InstructionsState {
         println!("Filled Cubes: {}", self.filled_cubes);
         println!("Positive Direction: {:?}", self.positive_direction);
         println!("========== Stack ==========");
-        self.vertical_stack.iter().for_each(|(p1, p2)| {
-            println!("\t{:?} =({})> {:?}", p1, p1.0.abs_diff(p2.0), p2,);
+        self.vertical_stack.iter().for_each(|vert_edge| {
+            println!("Col: {} | Length: {}", vert_edge.column, vert_edge.length);
         });
         println!("===========================");
     }
 }
 
 #[allow(dead_code)]
-fn part1() {
-    let input = load_input("part1.txt");
-    let instructions = input
+fn part_1_instructions(fname: &'static str) -> Vec<Instruction> {
+    let input = load_input(fname);
+    input
         .trim()
         .lines()
         .map(|l| l.parse::<Edge>().expect("Shoulda been an edge!"))
-        .map(|e| Instruction(e.direction, e.size))
-        .collect::<Vec<Instruction>>();
-    let mut state = InstructionsState::new();
-    state.process_instructions(instructions);
-    let result = state.filled_cubes;
-    // let mut plot = input.parse::<Plot>().unwrap();
+        .map(|e| Instruction::new(e.direction, e.size))
+        .collect::<Vec<Instruction>>()
+}
+
+#[allow(dead_code)]
+fn part_2_instructions(fname: &'static str) -> Vec<Instruction> {
+    let input = load_input(fname);
+    input
+        .lines()
+        .map(|l| l.parse::<Instruction>().unwrap())
+        .collect::<Vec<Instruction>>()
+}
+
+#[allow(dead_code)]
+fn part1() {
+    let input = load_input("part1.txt");
+    let mut plot = input.parse::<Plot>().unwrap();
     // println!("Edges: {:?}", plot.plotted_edges);
+    plot.display();
+    plot.excavate();
     // plot.display();
-    // plot.excavate();
-    // plot.display();
-    // let result = plot.count_holes();
+    let result = plot.count_holes();
     println!("Part 1 Result: {:?}", result);
 }
 
 #[allow(dead_code)]
 fn part2() {
-    let input = load_input("example1.txt");
-    let instructions = input
-        .lines()
-        .map(|l| l.parse::<Instruction>().unwrap())
-        .collect::<Vec<Instruction>>();
+    // let instructions = part_1_instructions("part1.txt");
+    let instructions = part_2_instructions("example1.txt");
     let counts = instructions.iter().fold(HashMap::new(), |mut acc, inst| {
-        let Instruction(direction, distance) = inst;
-        acc.entry(direction).or_insert_with(isize::default);
-        acc.entry(direction).and_modify(|e| *e += distance);
+        acc.entry(inst.direction).or_insert_with(isize::default);
+        acc.entry(inst.direction)
+            .and_modify(|e| *e += inst.distance);
         acc
     });
     println!("Counts: {:?}", counts);
@@ -713,6 +752,6 @@ fn part2() {
 }
 
 fn main() {
-    part1();
-    // part2();
+    // part1();
+    part2();
 }
