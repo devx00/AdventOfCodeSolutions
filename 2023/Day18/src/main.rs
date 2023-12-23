@@ -1,5 +1,6 @@
 use colored::{ColoredString, Colorize};
 use std::{
+    collections::HashMap,
     fs::File,
     io::{BufReader, Read},
     ops::{Index, IndexMut},
@@ -480,23 +481,235 @@ impl FromStr for Plot {
     }
 }
 
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
+struct Instruction(Direction, isize);
+
+impl FromStr for Instruction {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut hex_iter = s.split("#").skip(1).nth(0).unwrap().chars();
+        let distance_hex = String::from_iter(hex_iter.clone().take(5));
+        let dir: Direction = match hex_iter.nth(5) {
+            Some('0') => Direction::Right,
+            Some('1') => Direction::Down,
+            Some('2') => Direction::Left,
+            Some('3') => Direction::Up,
+            _ => panic!("Invalid direction hex"),
+        };
+
+        let distance = isize::from_str_radix(&distance_hex, 16).unwrap();
+
+        Ok(Instruction(dir, distance))
+    }
+}
+
+struct InstructionsState {
+    cursor: Position,
+    vertical_stack: Vec<(Position, Position)>,
+    positive_direction: Direction,
+    filled_cubes: isize,
+    prev_vert: Direction,
+    prev_horiz: Direction,
+    saw_vert_inflection: bool,
+    saw_horiz_inflection: bool,
+    vert_inflections_left: usize,
+    horiz_inflections_left: usize,
+}
+
+impl InstructionsState {
+    fn new() -> InstructionsState {
+        InstructionsState {
+            cursor: Position::default(),
+            vertical_stack: vec![],
+            positive_direction: Direction::Down,
+            filled_cubes: 0,
+            prev_vert: Direction::Down,
+            prev_horiz: Direction::Right,
+            saw_vert_inflection: false,
+            saw_horiz_inflection: false,
+            vert_inflections_left: 1,
+            horiz_inflections_left: 1,
+        }
+    }
+
+    fn process_instruction(&mut self, instruction: Instruction) {
+        let Instruction(direction, distance) = instruction;
+        println!("\n\nProcessing: {:?} {}", direction, distance);
+        match direction {
+            Direction::Up | Direction::Down => {
+                if self.prev_vert != direction {
+                    self.saw_vert_inflection = true;
+                    self.prev_vert = direction;
+                }
+            }
+            Direction::Left | Direction::Right => {
+                if self.prev_horiz != direction {
+                    self.saw_horiz_inflection = true;
+                    self.prev_horiz = direction;
+                }
+            }
+        }
+
+        match direction {
+            Direction::Left | Direction::Right => {
+                // self.filled_cubes += distance;
+                self.cursor.step(direction, distance);
+            }
+            direction if direction == self.positive_direction => {
+                println!(
+                    "Matched Positive Direction: instruction: {:?}, positive direction: {:?}",
+                    direction, self.positive_direction
+                );
+                let start = self.cursor.clone();
+                self.cursor.step(direction, distance);
+                let end = self.cursor.clone();
+
+                if self.saw_vert_inflection && self.vert_inflections_left > 0 {
+                    self.filled_cubes += distance;
+                    self.vert_inflections_left -= 1;
+                    self.saw_vert_inflection = false;
+                }
+
+                self.vertical_stack.push((start, end));
+            }
+            direction if direction != self.positive_direction => {
+                println!(
+                    "Matched Non-Positive Direction: instruction: {:?}, positive direction: {:?}",
+                    direction, self.positive_direction
+                );
+                let mut vert_distance_left = distance;
+                while let Some((start, end)) = self.vertical_stack.pop() {
+                    if vert_distance_left == 0 {
+                        break;
+                    }
+                    let width: isize = start.1.abs_diff(self.cursor.1).try_into().unwrap();
+                    let available_vertical = start.0.abs_diff(end.0).try_into().unwrap();
+                    let start_fixed = match end.0 == self.cursor.0 {
+                        true => start.clone(),
+                        false => end.clone(),
+                    };
+
+                    let will_rollover = available_vertical > vert_distance_left;
+
+                    let vert_distance = vert_distance_left.min(available_vertical);
+                    self.filled_cubes += vert_distance * width;
+                    vert_distance_left -= vert_distance;
+
+                    self.cursor.step(direction, vert_distance);
+
+                    let end_fixed = Position(self.cursor.0, start_fixed.1);
+
+                    if will_rollover && start_fixed.0 != end_fixed.0 {
+                        self.vertical_stack.push((start_fixed, end_fixed));
+
+                        break;
+                    }
+                }
+
+                if vert_distance_left != 0 {
+                    assert_eq!(
+                        self.vertical_stack.len(),
+                        0,
+                        "Vertical stack should always be empty if we reach here."
+                    );
+
+                    println!("Should be switching positive direction now!");
+
+                    self.positive_direction = match self.positive_direction {
+                        Direction::Up => Direction::Down,
+                        Direction::Down => Direction::Up,
+                        _ => panic!("Should only be up or down."),
+                    };
+
+                    self.process_instruction(Instruction(direction, vert_distance_left));
+                }
+            }
+            _ => panic!("Shouldnt reach here!"),
+        }
+
+        println!("-- End Processing --\n\n");
+    }
+    fn process_instructions(&mut self, instructions: Vec<Instruction>) -> isize {
+        let first_vert = instructions
+            .iter()
+            .map(|i| i.0)
+            .find(|d| match d {
+                Direction::Up | Direction::Down => true,
+                Direction::Right | Direction::Left => false,
+            })
+            .unwrap();
+        let first_horiz = instructions
+            .iter()
+            .map(|i| i.0)
+            .find(|d| match d {
+                Direction::Up | Direction::Down => false,
+                Direction::Right | Direction::Left => true,
+            })
+            .unwrap();
+
+        self.positive_direction = first_vert;
+
+        self.prev_vert = first_vert;
+        self.prev_horiz = first_horiz;
+        for instruction in instructions {
+            self.print();
+            self.process_instruction(instruction);
+            self.print();
+        }
+
+        self.filled_cubes
+    }
+    fn print(&self) {
+        println!("Cursor: {:?}", self.cursor);
+        println!("Filled Cubes: {}", self.filled_cubes);
+        println!("Positive Direction: {:?}", self.positive_direction);
+        println!("========== Stack ==========");
+        self.vertical_stack.iter().for_each(|(p1, p2)| {
+            println!("\t{:?} =({})> {:?}", p1, p1.0.abs_diff(p2.0), p2,);
+        });
+        println!("===========================");
+    }
+}
+
 #[allow(dead_code)]
 fn part1() {
     let input = load_input("part1.txt");
-    let mut plot = input.parse::<Plot>().unwrap();
+    let instructions = input
+        .trim()
+        .lines()
+        .map(|l| l.parse::<Edge>().expect("Shoulda been an edge!"))
+        .map(|e| Instruction(e.direction, e.size))
+        .collect::<Vec<Instruction>>();
+    let mut state = InstructionsState::new();
+    state.process_instructions(instructions);
+    let result = state.filled_cubes;
+    // let mut plot = input.parse::<Plot>().unwrap();
     // println!("Edges: {:?}", plot.plotted_edges);
     // plot.display();
-    plot.excavate();
+    // plot.excavate();
     // plot.display();
-    let result = plot.count_holes();
+    // let result = plot.count_holes();
     println!("Part 1 Result: {:?}", result);
 }
 
 #[allow(dead_code)]
 fn part2() {
     let input = load_input("example1.txt");
-    let result = input;
-    println!("Part 2 Result: {}", result);
+    let instructions = input
+        .lines()
+        .map(|l| l.parse::<Instruction>().unwrap())
+        .collect::<Vec<Instruction>>();
+    let counts = instructions.iter().fold(HashMap::new(), |mut acc, inst| {
+        let Instruction(direction, distance) = inst;
+        acc.entry(direction).or_insert_with(isize::default);
+        acc.entry(direction).and_modify(|e| *e += distance);
+        acc
+    });
+    println!("Counts: {:?}", counts);
+    let mut state = InstructionsState::new();
+    state.process_instructions(instructions);
+    let result = state.filled_cubes;
+    println!("Part 2 Result: {:?}", result);
 }
 
 fn main() {
