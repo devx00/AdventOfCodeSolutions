@@ -62,18 +62,12 @@ impl From<char> for Entity {
 #[derive(Debug)]
 struct Map {
     grid: Vec<Vec<Entity>>,
-    bounds_override: Option<Position>,
+    infinite_mode: bool,
 }
 
 impl Map {
-    fn literal_bounds(&self) -> Position {
-        Position(self.grid.len(), self.grid[0].len())
-    }
     fn bounds(&self) -> Position {
-        if let Some(override_bounds) = self.bounds_override {
-            return override_bounds;
-        }
-        self.literal_bounds()
+        Position(self.grid.len(), self.grid[0].len())
     }
 
     fn starting_position(&self) -> Position {
@@ -152,7 +146,7 @@ impl FromStr for Map {
                 .lines()
                 .map(|l| l.chars().map(|c| Entity::from(c)).collect::<Vec<Entity>>())
                 .collect::<Vec<Vec<Entity>>>(),
-            bounds_override: None,
+            infinite_mode: false,
         })
     }
 }
@@ -174,7 +168,7 @@ fn part2() {
     let mut map = input
         .parse::<Map>()
         .expect("Map should have been parsed successfully!");
-    map.bounds_override = Some(Position(usize::MAX, usize::MAX));
+    map.infinite_mode = true;
     // let test_inputs: Vec<(usize, usize)> = vec![
     //     (6, 16),
     //     (10, 50),
