@@ -7,6 +7,8 @@ use std::{
     str::FromStr,
 };
 
+use itertools::Itertools;
+
 fn load_input(input_name: &str) -> String {
     let input_file = File::open(format!("inputs/{}", input_name)).unwrap();
 
@@ -39,6 +41,40 @@ impl Position {
             })
             .collect::<Vec<Position>>()
     }
+
+    fn to_signed(&self) -> SignedPosition {
+        SignedPosition(self.0.try_into().unwrap(), self.1.try_into().unwrap())
+    }
+}
+
+#[derive(Debug, Hash, Clone, Copy, Eq, PartialEq)]
+struct SignedPosition(isize, isize);
+
+impl SignedPosition {
+    fn adjacent(&self) -> Vec<SignedPosition> {
+        let deltas: Vec<(isize, isize)> = vec![(0, 1), (1, 0), (-1, 0), (0, -1)];
+        deltas
+            .iter()
+            .map(|(dr, dc)| SignedPosition(self.0 + dr, self.1 + dc))
+            .collect::<Vec<SignedPosition>>()
+    }
+
+    fn normalized_position(&self, bounds: Position) -> Position {
+        let unsigned_row = match self.0 {
+            neg_row if neg_row < 0 => (bounds.0) - (((neg_row.abs_diff(0) - 1) % (bounds.0)) + 1),
+            pos_row => pos_row.abs_diff(0) % bounds.0,
+        };
+        let unsigned_col = match self.1 {
+            neg_col if neg_col < 0 => (bounds.1) - (((neg_col.abs_diff(0) - 1) % (bounds.1)) + 1),
+            pos_col => pos_col.abs_diff(0) % bounds.1,
+        };
+        // println!(
+        //     "R: {} => {}, C: {} => {} | {:?}",
+        //     self.0, unsigned_row, self.1, unsigned_col, bounds
+        // );
+
+        Position(unsigned_row, unsigned_col)
+    }
 }
 
 #[derive(Debug)]
@@ -62,7 +98,6 @@ impl From<char> for Entity {
 #[derive(Debug)]
 struct Map {
     grid: Vec<Vec<Entity>>,
-    infinite_mode: bool,
 }
 
 impl Map {
@@ -83,6 +118,17 @@ impl Map {
             .unwrap()
     }
 
+    fn valid_steps_signed(&self, from_position: SignedPosition) -> Vec<SignedPosition> {
+        from_position
+            .adjacent()
+            .into_iter()
+            .filter_map(|p| match self[p] {
+                Entity::StartingPosition | Entity::GardenPlot => Some(p),
+                _ => None,
+            })
+            .collect::<Vec<SignedPosition>>()
+    }
+
     fn valid_steps(&self, from_position: Position) -> Vec<Position> {
         from_position
             .adjacent(self.bounds())
@@ -92,6 +138,40 @@ impl Map {
                 _ => None,
             })
             .collect::<Vec<Position>>()
+    }
+
+    fn count_max_positions_signed(&self, steps_allowed: isize) -> usize {
+        let mut seen: HashMap<SignedPosition, isize> = HashMap::new();
+        let mut position_queue: VecDeque<(SignedPosition, isize)> = VecDeque::new();
+
+        let matching_remainder = steps_allowed % 2;
+        position_queue.push_back((self.starting_position().to_signed(), 0));
+
+        while let Some((position, step_count)) = position_queue.pop_front() {
+            if seen.contains_key(&position) {
+                continue;
+            }
+
+            seen.insert(position, step_count);
+            // println!("({}, {}), {}", position.0, position.1, step_count);
+
+            if step_count < steps_allowed {
+                position_queue.extend(
+                    self.valid_steps_signed(position)
+                        .into_iter()
+                        .filter(|p| !seen.contains_key(p))
+                        .map(|next_p| (next_p, step_count + 1)),
+                );
+            }
+        }
+
+        let step_counts = seen.values().counts();
+        let sorted_counts = step_counts.iter().sorted();
+        // println!("Step Counts: {:?}", sorted_counts);
+
+        seen.iter()
+            .filter(|(_, v)| *v % 2 == matching_remainder)
+            .count()
     }
 
     fn count_max_positions(&self, steps_allowed: usize) -> usize {
@@ -132,8 +212,17 @@ impl Index<Position> for Map {
     type Output = Entity;
     fn index(&self, index: Position) -> &Self::Output {
         // println!("Finding Position: {:?}", index);
-        let l_bounds = self.literal_bounds();
+        let l_bounds = self.bounds();
         &self.grid[index.0 % l_bounds.0][index.1 % l_bounds.1]
+    }
+}
+impl Index<SignedPosition> for Map {
+    type Output = Entity;
+    fn index(&self, index: SignedPosition) -> &Self::Output {
+        // println!("Finding Position: {:?}", index);
+        let l_bounds = self.bounds();
+        let n_index = index.normalized_position(l_bounds);
+        &self.grid[n_index.0][n_index.1]
     }
 }
 
@@ -146,7 +235,6 @@ impl FromStr for Map {
                 .lines()
                 .map(|l| l.chars().map(|c| Entity::from(c)).collect::<Vec<Entity>>())
                 .collect::<Vec<Vec<Entity>>>(),
-            infinite_mode: false,
         })
     }
 }
@@ -164,31 +252,34 @@ fn part1() {
 
 #[allow(dead_code)]
 fn part2() {
-    let input = load_input("example1.txt");
+    let input = load_input("part1.txt");
     let mut map = input
         .parse::<Map>()
         .expect("Map should have been parsed successfully!");
-    map.infinite_mode = true;
-    // let test_inputs: Vec<(usize, usize)> = vec![
+    // println!("Bounds: {:?}", map.bounds());
+    // let test_inputs: Vec<(isize, usize)> = vec![
     //     (6, 16),
     //     (10, 50),
     //     (50, 1594),
-    //     (180, 6536),
+    //     (100, 6536),
     //     (500, 167004),
-    //     (1000, 668697),
-    //     (5000, 16733044),
+    //     // (1000, 668697),
+    //     // (5000, 16733044),
     // ];
-    // test_inputs
-    //     .into_iter()
-    //     .for_each(|(input, expected_answer)| {
-    //         let answer = map.count_max_positions(input);
-    //         if answer != expected_answer {
-    //             println!(
-    //                 "Got Wrong Answer for: {}. Expected {}, Got: {}",
-    //                 input, expected_answer, answer
-    //             );
-    //         }
-    //     });
+    let test_inputs = (0..500);
+    test_inputs
+        // .into_iter()
+        .for_each(|input| {
+            let answer = map.count_max_positions_signed(input);
+            println!("{}, {}", input, answer);
+            // println!(
+            //     "Got Wrong Answer for: {}. Expected {}, Got: {} | {}",
+            //     input,
+            //     expected_answer,
+            //     answer,
+            //     expected_answer == answer
+            // );
+        });
     // let result = map.count_max_positions(26501365);
     // map.check_position(Position(11, 11));
     // map.check_position(Position(11, 11));
@@ -197,6 +288,6 @@ fn part2() {
 }
 
 fn main() {
-    part1();
-    // part2();
+    // part1();
+    part2();
 }
