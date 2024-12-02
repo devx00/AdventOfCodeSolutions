@@ -3,10 +3,12 @@ use egui::Context;
 use egui_graphs::{DefaultEdgeShape, DefaultNodeShape, GraphView};
 use egui_graphs::{Graph as EGraph, SettingsInteraction};
 use petgraph::adj::NodeIndex;
+use petgraph::algo::tarjan_scc;
 use petgraph::{
     stable_graph::{DefaultIx, StableGraph, StableUnGraph},
     Undirected,
 };
+use std::cell::RefCell;
 use std::{
     collections::{HashMap, HashSet},
     fs::File,
@@ -27,6 +29,157 @@ type NodeId = String;
 #[derive(Debug)]
 struct Graph {
     nodes: HashMap<NodeId, HashSet<NodeId>>,
+}
+
+#[derive(Debug)]
+enum GraphPartitionGroup {
+    GroupA,
+    GroupB,
+}
+struct GraphPartition {
+    group_a: HashSet<NodeId>,
+    group_b: HashSet<NodeId>,
+    graph: RefCell<Graph>,
+    num_crossreferences: usize,
+}
+
+impl GraphPartition {
+    fn new(graph: Graph) -> Self {
+        Self {
+            group_a: graph
+                .nodes
+                .keys()
+                .into_iter()
+                .map(|k| k.clone())
+                .collect::<HashSet<NodeId>>(),
+            group_b: HashSet::new(),
+            graph: RefCell::new(graph),
+            num_crossreferences: 0,
+        }
+    }
+    fn whereis(&self, node: &NodeId) -> GraphPartitionGroup {
+        if self.group_b.contains(node) {
+            return GraphPartitionGroup::GroupA;
+        }
+
+        if self.group_a.contains(node) {
+            return GraphPartitionGroup::GroupB;
+        }
+
+        panic!("Node doesnt exist in either group!");
+    }
+
+    fn move_node(
+        &mut self,
+        node: NodeId,
+        cross_inc: usize,
+        cross_dec: usize,
+        to_group: GraphPartitionGroup,
+    ) {
+        let (target_group, other_group) = match to_group {
+            GraphPartitionGroup::GroupA => (&mut self.group_a, &mut self.group_b),
+            GraphPartitionGroup::GroupB => (&mut self.group_b, &mut self.group_a),
+        };
+
+        println!(
+            "Moving Node {} to {:?} (inc {}, dec {}) {}",
+            node, to_group, cross_inc, cross_dec, self.num_crossreferences
+        );
+        other_group.remove(&node);
+        target_group.insert(node);
+
+        self.num_crossreferences += cross_inc;
+        self.num_crossreferences -= cross_dec;
+    }
+
+    fn cross_references(&self) -> HashMap<NodeId, (isize, isize)> {
+        let mut cross_map: HashMap<NodeId, (isize, isize)> = HashMap::new();
+        self.group_a
+            .iter()
+            .map(|n| {
+                self.graph.borrow().edges(n).into_iter().fold(
+                    (n.to_string(), 0isize, 0isize),
+                    |(cn, inc, dec), ne| match self.group_b.contains(&ne) {
+                        true => (cn, inc, dec + 1),
+                        false => (cn, inc + 1, dec),
+                    },
+                )
+            })
+            .for_each(|(n, inc, dec)| {
+                cross_map
+                    .entry(n)
+                    .and_modify(|(e_inc, e_dec)| {
+                        *e_inc += inc;
+                        *e_dec += dec;
+                    })
+                    .or_insert((inc, dec));
+            });
+
+        println!("Cross Map: {:?}", cross_map);
+        cross_map
+    }
+
+    fn next_node_to_move(&self) -> Option<(NodeId, (isize, isize))> {
+        self.cross_references().into_iter().fold(
+            None as Option<(NodeId, (isize, isize))>,
+            |acc, (next_node, (next_inc, next_dec))| match acc {
+                Some((acc_node, (acc_inc, acc_dec))) => {
+                    let net_acc = acc_inc - acc_dec;
+                    let net_next = next_inc - next_dec;
+                    if net_next < net_acc {
+                        Some((next_node, (next_inc, next_dec)))
+                    } else {
+                        Some((acc_node, (acc_inc, acc_dec)))
+                    }
+                }
+                _ => Some((next_node, (next_inc, next_dec))),
+            },
+        )
+    }
+
+    fn find_partitions(&mut self) -> Result<usize, String> {
+        let first = self
+            .graph
+            .borrow()
+            .nodes
+            .iter()
+            .map(|(n, e)| (n.to_string(), e.len()))
+            .reduce(
+                |(curr_n, curr_e), (n, e)| {
+                    if e > curr_e {
+                        (n, e)
+                    } else {
+                        (curr_n, curr_e)
+                    }
+                },
+            )
+            .expect("Node to exist");
+
+        self.move_node(first.0.to_string(), first.1, 0, GraphPartitionGroup::GroupB);
+        let init_edges = self.graph.borrow().edges(&first.0);
+        for node in init_edges.iter() {
+            self.move_node(node.to_string(), GraphPartitionGroup::GroupB);
+        }
+        println!("{:?}\n{:?}", self.group_a, self.group_b);
+
+        while let Some((next_node, (next_inc, next_dec))) = self.next_node_to_move() {
+            self.move_node(
+                next_node,
+                next_inc as usize,
+                next_dec as usize,
+                GraphPartitionGroup::GroupB,
+            );
+
+            if self.num_crossreferences == 3 {
+                break;
+            }
+        }
+
+        match self.num_crossreferences {
+            3 => Ok(self.group_a.len() * self.group_b.len()),
+            _ => Err("Couldnt find valid partition...".to_string()),
+        }
+    }
 }
 
 impl FromStr for Graph {
@@ -52,6 +205,10 @@ impl FromStr for Graph {
 }
 
 impl Graph {
+    fn edges(&self, node: &NodeId) -> Vec<NodeId> {
+        self.nodes[node].clone().into_iter().collect()
+    }
+
     fn partition(&self, root: String, k: usize) -> Option<(usize, usize)> {
         let mut seen: HashSet<NodeId> = HashSet::new();
         let mut next_nodes: Vec<NodeId> = vec![root];
@@ -158,9 +315,14 @@ fn show_graph(graph: StableGraph<String, (), Undirected>) {
 
 #[allow(dead_code)]
 fn part1() {
-    let input = load_input("part1.txt");
+    let input = load_input("example1.txt");
     let graph = input.parse::<Graph>().expect("Graph");
-    show_graph(graph.generate_stable_graph());
+    let mut partition = GraphPartition::new(graph);
+    match partition.find_partitions() {
+        Ok(result) => println!("Part 1 result: {}", result),
+        Err(e) => println!("Part 1 failed: {}", e),
+    }
+    // show_graph(graph.generate_stable_graph());
     // let result = graph.find_partition(3).expect("Couldn't find partition..");
 
     // println!("Part 1 Result: {}", result);
